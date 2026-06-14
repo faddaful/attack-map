@@ -17,12 +17,72 @@ can't be turned against others. Don't run it on infrastructure you don't own.
 ---
 
 ## 0. What you need
-- A cheap throwaway VPS (DigitalOcean / Hetzner / Vultr, ~$5/mo). **Do not run
-  this on africonnect.app or any box you care about** — a honeypot is meant to
-  be probed, so it stays isolated.
+- A throwaway VPS. A paid box works (DigitalOcean / Hetzner / Vultr, ~$5/mo),
+  or get one **free forever** with Oracle Cloud Always Free — see the next
+  section. **Do not run this on any box you care about** — a
+  honeypot is meant to be probed, so it stays isolated.
 - Python 3.10+.
 - (Free, optional) MaxMind GeoLite2 account for offline geolocation.
 - (Free, optional) AbuseIPDB and/or GreyNoise API keys for richer threat scores.
+
+## Free VPS option — Oracle Cloud Always Free
+You don't have to pay for the honeypot box. Oracle Cloud's **Always Free** tier
+is genuinely free forever (not a 12-month trial): up to 4 Arm Ampere A1 cores +
+24 GB RAM, 200 GB storage, and 10 TB/month egress, with data centres in London,
+Frankfurt and Amsterdam. The whole Python stack runs fine on Arm. A credit/debit
+card is required for identity verification only — Always Free resources are never
+charged. Treat the account as disposable: a honeypot attracts abuse-flag
+attention, and Oracle reclaims instances it deems idle or flagged, so keep
+nothing valuable on it.
+
+**Provision:** create an Always Free VM — shape `VM.Standard.A1.Flex` (Arm) or
+the smaller `VM.Standard.E2.1.Micro` (AMD) — with an Ubuntu 22.04+ image, and
+make sure it's assigned a **public IPv4** address. Save the SSH key it generates.
+
+### Opening the honeypot ports (the part everyone gets stuck on)
+OCI blocks all inbound traffic except SSH behind **two independent firewalls**.
+You must open each port in **both**, or it silently won't work.
+
+1. **Cloud layer — VCN Security List.** Console → Networking → Virtual Cloud
+   Networks → your VCN → your subnet → **Default Security List → Add Ingress
+   Rules**. Add one stateful rule per port (Source `0.0.0.0/0`, IP Protocol TCP,
+   Destination Port Range): `49222` (your new SSH port), then `23, 80, 443,
+   2222, 3389, 5900, 8080` (honeypot) and `8000` (dashboard). Port `22` is open
+   by default — leave it; the honeypot will use it. (You can restrict the
+   `49222` rule's source to your own IP for tighter SSH security.)
+
+2. **Host layer — instance firewall.** Oracle's Ubuntu image ships an iptables
+   ruleset that rejects everything past port 22, and the reject rule sits high in
+   the chain — so you must **insert** ACCEPT rules *above* it, not append. Don't
+   use `ufw` here (OCI docs discourage it; it conflicts with these rules). SSH in
+   and run:
+   ```bash
+   for p in 49222 23 80 443 2222 3389 5900 8080 8000; do
+     sudo iptables -I INPUT 6 -p tcp --dport "$p" -j ACCEPT
+   done
+   sudo apt-get install -y netfilter-persistent
+   sudo netfilter-persistent save
+   ```
+   `-I INPUT 6` inserts before the reject rule on a stock OCI Ubuntu image — run
+   `sudo iptables -L INPUT --line-numbers` and confirm your ACCEPTs land *above*
+   the `REJECT ... icmp-host-prohibited` line. On an **Oracle Linux** image use
+   firewalld instead: `sudo firewall-cmd --permanent --add-port=8000/tcp` (repeat
+   per port), then `sudo firewall-cmd --reload`.
+
+### Don't lock yourself out
+Sequence this carefully with Section 1's SSH-port move:
+1. Open `49222` (and the other ports) in **both** layers, as above, while still
+   connected on port 22.
+2. Now do Section 1 to move SSH to `49222` and restart it — your current session
+   stays alive; restarting sshd doesn't drop existing connections.
+3. **Before closing that session**, open a second terminal and confirm
+   `ssh -p 49222 ubuntu@your-vps` connects.
+4. Only once that works, close the old session. Port `22` is now free for the
+   honeypot.
+
+Diagnostic if a port still won't connect: run `sudo tcpdump -ni any port 8000`
+and hit it from outside. Packets showing up means the host firewall is the
+culprit; total silence means it's the Security List.
 
 ## 1. Harden the VPS FIRST (do this before binding the honeypot)
 The honeypot wants port 22, but that's where your real SSH lives. Move your real
