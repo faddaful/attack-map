@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>THREATSCOPE // Live Attack Map</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
+<script src="https://unpkg.com/globe.gl@2.32.0/dist/globe.gl.min.js"></script>
+<style>
+  :root{
+    --bg:#04070d; --panel:rgba(8,14,24,.72); --line:rgba(64,120,160,.22);
+    --cyan:#22d3ee; --amber:#f59e0b; --red:#ef4444; --green:#34d399;
+    --txt:#cfe6f2; --dim:#5e7d92;
+    --glow:0 0 18px rgba(34,211,238,.45);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);overflow:hidden;color:var(--txt);
+    font-family:'JetBrains Mono',monospace;cursor:crosshair}
+  #globe{position:fixed;inset:0}
+  /* vignette + scanline atmosphere */
+  body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:5;
+    background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.7) 100%);}
+  body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:6;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 2px,rgba(0,20,30,.10) 2px 4px);
+    mix-blend-mode:overlay;}
+
+  .hud{position:fixed;z-index:10;pointer-events:none}
+  .panel{background:var(--panel);border:1px solid var(--line);
+    backdrop-filter:blur(6px);padding:14px 16px;
+    box-shadow:inset 0 0 30px rgba(0,40,60,.25);}
+  .panel::before{content:"";position:absolute;top:-1px;left:-1px;width:12px;height:12px;
+    border-top:2px solid var(--cyan);border-left:2px solid var(--cyan)}
+  .panel{position:relative}
+
+  /* top bar */
+  #top{top:0;left:0;right:0;display:flex;justify-content:space-between;
+    align-items:center;padding:16px 22px;
+    background:linear-gradient(180deg,rgba(4,7,13,.9),transparent)}
+  .brand{font-family:'Chakra Petch',sans-serif;font-weight:700;font-size:22px;
+    letter-spacing:6px;color:#fff;text-shadow:var(--glow)}
+  .brand small{color:var(--cyan);font-size:11px;letter-spacing:3px;display:block;
+    font-weight:500;margin-top:2px}
+  .status{display:flex;gap:18px;align-items:center;font-size:11px;letter-spacing:2px;
+    color:var(--dim)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+    background:var(--red);margin-right:6px;box-shadow:0 0 8px var(--red)}
+  .dot.live{background:var(--green);box-shadow:0 0 10px var(--green);
+    animation:pulse 1.4s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+
+  /* left stats */
+  #left{top:90px;left:22px;width:230px;display:flex;flex-direction:column;gap:14px}
+  .metric .k{font-size:10px;letter-spacing:2px;color:var(--dim);text-transform:uppercase}
+  .metric .v{font-family:'Chakra Petch',sans-serif;font-size:38px;font-weight:700;
+    color:#fff;line-height:1;text-shadow:var(--glow)}
+  .metric .v.small{font-size:24px}
+  .sev-row{display:flex;justify-content:space-between;font-size:12px;margin-top:8px}
+  .sev-row span:first-child{display:flex;align-items:center;gap:7px}
+  .chip{width:9px;height:9px;border-radius:2px;display:inline-block}
+  .chip.scan{background:var(--cyan);box-shadow:0 0 7px var(--cyan)}
+  .chip.suspicious{background:var(--amber);box-shadow:0 0 7px var(--amber)}
+  .chip.malicious{background:var(--red);box-shadow:0 0 7px var(--red)}
+
+  h3.cap{font-size:10px;letter-spacing:3px;color:var(--cyan);margin-bottom:10px;
+    text-transform:uppercase}
+  .bar{display:flex;justify-content:space-between;font-size:12px;margin:5px 0;
+    color:var(--txt)}
+  .bar .track{flex:1;height:3px;background:rgba(255,255,255,.06);margin:7px 10px 0;
+    position:relative}
+  .bar .fill{position:absolute;left:0;top:0;height:100%;background:var(--cyan);
+    box-shadow:0 0 6px var(--cyan)}
+
+  /* right feed */
+  #right{top:90px;right:22px;width:300px;bottom:24px;display:flex;flex-direction:column}
+  #feed{flex:1;overflow:hidden;display:flex;flex-direction:column;gap:0;margin-top:4px}
+  .row{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;
+    padding:7px 2px;border-bottom:1px solid rgba(255,255,255,.04);
+    font-size:11px;animation:slide .4s ease}
+  @keyframes slide{from{opacity:0;transform:translateX(14px)}}
+  .row .ip{color:#fff}
+  .row .meta{color:var(--dim);font-size:10px}
+  .row .sv{font-size:9px;letter-spacing:1px;padding:2px 6px;border:1px solid}
+  .sv.scan{color:var(--cyan);border-color:var(--cyan)}
+  .sv.suspicious{color:var(--amber);border-color:var(--amber)}
+  .sv.malicious{color:var(--red);border-color:var(--red);
+    animation:flash 1s infinite}
+  @keyframes flash{50%{background:rgba(239,68,68,.18)}}
+
+  #bottom{bottom:0;left:0;right:0;text-align:center;padding:6px;font-size:10px;
+    letter-spacing:2px;color:var(--dim);
+    background:linear-gradient(0deg,rgba(4,7,13,.8),transparent)}
+  .btn{pointer-events:auto;cursor:pointer;background:transparent;color:var(--cyan);
+    border:1px solid var(--cyan);font-family:'JetBrains Mono';font-size:10px;
+    letter-spacing:2px;padding:6px 12px;margin-left:14px}
+  .btn:hover{background:rgba(34,211,238,.12)}
+</style>
+</head>
+<body>
+<div id="globe"></div>
+
+<div class="hud" id="top">
+  <div class="brand">THREATSCOPE<small>LIVE GLOBAL ATTACK TELEMETRY</small></div>
+  <div class="status">
+    <span><span class="dot" id="conn-dot"></span><span id="conn-txt">CONNECTING</span></span>
+    <span id="clock"></span>
+    <button class="btn" id="demo-btn">SIMULATE</button>
+  </div>
+</div>
+
+<div class="hud" id="left">
+  <div class="panel metric">
+    <div class="k">Total Intrusions</div>
+    <div class="v" id="m-total">0</div>
+  </div>
+  <div class="panel metric">
+    <div class="k">Attacks / min</div>
+    <div class="v small" id="m-rate">0</div>
+    <div class="sev-row"><span><span class="chip scan"></span>Scan</span><span id="s-scan">0</span></div>
+    <div class="sev-row"><span><span class="chip suspicious"></span>Suspicious</span><span id="s-suspicious">0</span></div>
+    <div class="sev-row"><span><span class="chip malicious"></span>Malicious</span><span id="s-malicious">0</span></div>
+  </div>
+  <div class="panel">
+    <h3 class="cap">Top Origins</h3>
+    <div id="top-countries"></div>
+  </div>
+  <div class="panel">
+    <h3 class="cap">Targeted Ports</h3>
+    <div id="top-ports"></div>
+  </div>
+</div>
+
+<div class="hud panel" id="right">
+  <h3 class="cap">Live Event Feed</h3>
+  <div id="feed"></div>
+</div>
+
+<div class="hud" id="bottom">THREATSCOPE OPS // PYTHON · OSINT · WEBSOCKET STREAM // DEFENSIVE TELEMETRY ONLY</div>
+
+<script>
+const SEV_COLOR = {scan:'#22d3ee', suspicious:'#f59e0b', malicious:'#ef4444'};
+const state = {
+  total:0, sev:{scan:0,suspicious:0,malicious:0},
+  countries:{}, ports:{}, times:[], sensor:{lat:0,lon:0}
+};
+const arcs = [], rings = [];
+
+// ---- Globe ----
+const world = Globe()(document.getElementById('globe'))
+  .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-dark.jpg')
+  .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+  .backgroundColor('rgba(0,0,0,0)')
+  .showAtmosphere(true).atmosphereColor('#1c5a78').atmosphereAltitude(0.18)
+  .arcColor('color').arcStroke(0.5)
+  .arcDashLength(0.45).arcDashGap(0.6).arcDashInitialGap(1)
+  .arcDashAnimateTime(1600).arcsTransitionDuration(0)
+  .ringColor(d => t => d.color.replace(')', `,${1-t})`).replace('rgb','rgba'))
+  .ringMaxRadius('maxR').ringPropagationSpeed('speed').ringRepeatPeriod('period');
+
+world.arcsData(arcs).ringsData(rings);
+world.controls().autoRotate = true;
+world.controls().autoRotateSpeed = 0.35;
+world.controls().enableZoom = true;
+
+window.addEventListener('resize', () => {
+  world.width(window.innerWidth).height(window.innerHeight);
+});
+world.width(window.innerWidth).height(window.innerHeight);
+
+function rgbOf(hex){
+  const n = parseInt(hex.slice(1),16);
+  return `rgb(${n>>16&255},${n>>8&255},${n&255})`;
+}
+
+function addAttack(ev){
+  const color = SEV_COLOR[ev.severity] || SEV_COLOR.scan;
+  const arc = {
+    startLat:ev.lat, startLng:ev.lon,
+    endLat:ev.dst_lat ?? state.sensor.lat, endLng:ev.dst_lon ?? state.sensor.lon,
+    color:[color, '#ffffff']
+  };
+  arcs.push(arc);
+  world.arcsData(arcs);
+  setTimeout(() => { const i=arcs.indexOf(arc); if(i>-1)arcs.splice(i,1); world.arcsData(arcs); }, 2600);
+
+  // impact ring at the sensor
+  const ring = {lat:arc.endLat, lng:arc.endLng, color:rgbOf(color),
+                maxR:ev.severity==='malicious'?6:3, speed:3, period:700};
+  rings.push(ring);
+  world.ringsData(rings);
+  setTimeout(() => { const i=rings.indexOf(ring); if(i>-1)rings.splice(i,1); world.ringsData(rings); }, 1500);
+}
+
+// ---- Stats / UI ----
+const $ = id => document.getElementById(id);
+function tickStats(ev){
+  state.total++;
+  state.sev[ev.severity] = (state.sev[ev.severity]||0)+1;
+  if(ev.country) state.countries[ev.country] = (state.countries[ev.country]||0)+1;
+  if(ev.dst_port) state.ports[ev.dst_port] = (state.ports[ev.dst_port]||0)+1;
+  state.times.push(Date.now());
+}
+function renderTop(obj, el, label){
+  const top = Object.entries(obj).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const max = top.length?top[0][1]:1;
+  el.innerHTML = top.map(([k,v]) =>
+    `<div class="bar"><span>${label?label+k:k}</span>
+       <div class="track"><div class="fill" style="width:${v/max*100}%"></div></div>
+       <span>${v}</span></div>`).join('') || '<div class="bar"><span>—</span></div>';
+}
+function renderStats(){
+  $('m-total').textContent = state.total.toLocaleString();
+  const cut = Date.now()-60000;
+  state.times = state.times.filter(t=>t>cut);
+  $('m-rate').textContent = state.times.length;
+  for(const s of ['scan','suspicious','malicious']) $('s-'+s).textContent = state.sev[s];
+  renderTop(state.countries, $('top-countries'));
+  renderTop(state.ports, $('top-ports'), ':');
+}
+function addFeed(ev){
+  const feed = $('feed');
+  const row = document.createElement('div');
+  row.className='row';
+  row.innerHTML = `<span class="chip ${ev.severity}"></span>
+    <span><span class="ip">${ev.src_ip}</span>
+      <span class="meta">${(ev.country||'??')} · :${ev.dst_port||'?'} ${ev.service||''}</span></span>
+    <span class="sv ${ev.severity}">${ev.severity.slice(0,4).toUpperCase()}</span>`;
+  feed.prepend(row);
+  while(feed.children.length>18) feed.removeChild(feed.lastChild);
+}
+function handle(ev){
+  if(!ev || ev.lat==null) return;
+  addAttack(ev); tickStats(ev); addFeed(ev);
+}
+
+// ---- WebSocket ----
+function connect(){
+  const proto = location.protocol==='https:'?'wss':'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { $('conn-dot').classList.add('live'); $('conn-txt').textContent='LIVE'; };
+  ws.onclose = () => {
+    $('conn-dot').classList.remove('live'); $('conn-txt').textContent='RECONNECT';
+    setTimeout(connect, 2500);
+  };
+  ws.onmessage = m => {
+    const d = JSON.parse(m.data);
+    if(d.type==='init'){
+      if(d.sensor){ state.sensor=d.sensor; world.pointOfView({lat:d.sensor.lat,lng:d.sensor.lon,altitude:2.2},1200);}
+      (d.recent||[]).forEach(handle);
+      return;
+    }
+    handle(d);
+  };
+}
+connect();
+
+// ---- Clock ----
+setInterval(()=>{ $('clock').textContent = new Date().toISOString().slice(11,19)+' UTC'; },1000);
+setInterval(renderStats, 700);
+
+// ---- Simulate (for rehearsal / B-roll only) ----
+const CITIES=[[55.75,37.6,'Russia'],[39.9,116.4,'China'],[ -23.5,-46.6,'Brazil'],
+  [28.6,77.2,'India'],[52.5,13.4,'Germany'],[40.7,-74.0,'United States'],
+  [ -6.2,106.8,'Indonesia'],[ -33.8,151.2,'Australia'],[35.6,139.6,'Japan']];
+const SEVS=['scan','scan','scan','suspicious','suspicious','malicious'];
+const PORTS=[22,23,80,443,3389,445,8080,5900];
+$('demo-btn').onclick = () => {
+  const iv = setInterval(()=>{
+    const c=CITIES[Math.random()*CITIES.length|0];
+    handle({src_ip:`${Math.random()*223+1|0}.${Math.random()*255|0}.${Math.random()*255|0}.${Math.random()*255|0}`,
+      lat:c[0]+(Math.random()-.5)*4, lon:c[1]+(Math.random()-.5)*4, country:c[2],
+      dst_lat:state.sensor.lat, dst_lon:state.sensor.lon,
+      dst_port:PORTS[Math.random()*PORTS.length|0],
+      service:'sim', severity:SEVS[Math.random()*SEVS.length|0]});
+  }, 350);
+  setTimeout(()=>clearInterval(iv), 12000);
+};
+</script>
+</body>
+</html>
